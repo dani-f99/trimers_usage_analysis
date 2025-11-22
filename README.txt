@@ -34,12 +34,6 @@ which derived from the ImmuneDB database.
 -----------------------------
 -----------------------------
 -----------------------------
---- Guide ---
-1. 
------------------------------
------------------------------
------------------------------
------------------------------
 --- Pipeline --------------
 follow the steps in trimers_tutorial.ipynb to perform LPA and get pca plot:
 1. Configure the MySQL connector (block no.2 - trimers_tutorial.ipynb) or import existing tables
