@@ -6,55 +6,58 @@
 -----------------------------
 -----------------------------
 --- General-Information -----
-This program aim is to analyze and visualize the results of trimers usage in the BCR heavy variable region of multiple immune repotiore
-which derived from the ImmuneDB database. 
+This program aim is to create, preprocess, analyze and visualize trimers usage across the BCR heavy chain region
+of multiple immune repotiores. To do so it utilize the LPA algorithm (see bottom LPA section).
 -----------------------------
 -----------------------------
 -----------------------------
 -----------------------------
 --- Required-Python-Modules -
-1.  pandas
-2.  numpy
-3.  datetime
-4.  functools
-5.  pathlib 
-6.  typing
-7.  copy
-8.  importlib
-8.  itertools
-9.  scipy
-10. sklearn
-11. math
-12. seaborn
-13. natsort
-14. os
-15. tqdm
-16. pymysql
+1. pandas
+2. numpy 
+3. scipy
+4. sklearn
+5. seaborn
+6. natsort
+7. tqdm
+8. pymysql
 -----------------------------
 -----------------------------
 -----------------------------
 -----------------------------
---- Pipeline --------------
-follow the steps in trimers_tutorial.ipynb to perform LPA and get pca plot:
-1. Configure the MySQL connector (block no.2 - trimers_tutorial.ipynb) or import existing tables
-   the required tables (ImmuneBD format) are: sequences, sequence_collapse and sample_metadata.
-2. Create trimer class object via the scripts.TrimerLPA.TrimerLPA class method.
-3. perform PCA on the signatures matrix with the class method trimerLPA.pca.
-4. after performing the PCA, can plot heatmap with the trimerLPA.plot_heatmap method.
+--- Guide -------------------
+See 'trimers_usage_analysis.ipynb' example notebook
+1. Trimer usage input file to be used with the LPA algorithm
+   - scripts.TrimerSQL -> contating scripts which can be used to import tables from MySQL server. 
+                          used to import the labs ImmuneDB tables from our MySQL serever. Please
+						  complete the input example list to use (in the example noteb   
+   - If the tables were already exported we skip the MySQL import and go ahead and create the trimer 
+     input file via the scripts.TrimerCreate.Trimer function. see documentation and example in the 
+	 notebook.
+	 
+2. Trimer usage LPA results visualization
+   - Use the file that was created in the previous step to with the scripts.TrimerLPA.TrimerLPA class:
+     a. perform PCA on the KLDe distances with the class method pca applied on the TrimerLPA object.
+	 b. Visualize the PC clustring via the code in cell block 7.
+	
+3. Trimer usage analysis
+   - In the notebook we take into consideration the results from our prevoius analysis (diversity analysis)
+   - We use the scripts.TrimerAnalyze.TrimerAnalysis class to both study the diversity and presence of trimers
+     across the different immune repotiore.
+   - We initiate the medians_info class and use it's visualization methods plot_median_hist and plot_median_presence
+     to see the distribution of trimers between antigen specific sub-repotiores.
 
-follow the steps in the steps in trimers_study_v3.pynb to get information about the trimers properties:
-1. Ceate LPA object and perform LPA
-2. Visualize the KLDe distances from the domain, analyze the medians via the Trimers_Analyze.medians_info
-   and medians_hist class methods.
- 
-follow the steps in the steps in trimers_motif.pynb to get information about specific found genetic motif:
-1. define the motif in the "motif_list" var and follow the steps.
+4. Genetic motif 
+   - In the last step of this pipeline we are looking for trimers that answer two conditions:
+     a. They are in the extreamly high or low median distance from the domain
+	 b. They are common, meaning their diveristy score is at least 1.
+   - The notebook has preprocessing step followed by trimers visualization. The code can be modified as needed.
 -----------------------------
 -----------------------------
 -----------------------------
 -----------------------------
 --- Subfolders --------------
-1. scripts -> Contaning all the relevent code for this program.
+1. scripts -> Containing all the relevent code for this program.
 2. trimers_data -> Datasets containg the data for the LPA analysis.
 3. trimers_figures -> Results Figures.
 4. trimers_medians -> Medians tables and figure of the treims usage KLDe distances.
@@ -63,5 +66,11 @@ follow the steps in the steps in trimers_motif.pynb to get information about spe
 7. trimers_raw_tables -> Unprocessed sequences tables from the ImmuneBD MySQL server.
 8. trimers_results -> Diversity and presance of trimers tables (results).
 -----------------------------
-
+-----------------------------
+-----------------------------
+-----------------------------
+---LPA-----------------------
+Publication: https://link.springer.com/article/10.1007/s11257-021-09295-7
+GitHub: https://github.com/ScanLab-ossi/LPA
+-----------------------------
 
