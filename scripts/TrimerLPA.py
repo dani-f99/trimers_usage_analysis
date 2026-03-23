@@ -136,8 +136,8 @@ class TrimerLPA():
         scale : bool -> scaling the data (standard scaler) before performing principle component analysis.
         """
 
-        pca_input = self.sig_df.T
-        pca_intput_index = self.sig_df.T.index
+        pca_input = self.sig_df
+        pca_intput_index = self.sig_df.index
 
         if scale:
             pca_input = StandardScaler().fit_transform(self.sig_df.T)
