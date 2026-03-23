@@ -160,16 +160,18 @@ class Trimer():
             
             # Importing the metadata csv and orginizing the dataframe for the relevent information.
             metadata = pd.read_csv(metadata_loc, index_col=0)
-            metadata_df = metadata.groupby(["sample_id","key"]).describe().reset_index()[[("sample_id",""), ("key",""), ("value","top")]].droplevel(level=1,axis=1)
-            metadata_df = metadata_df[metadata_df.key.isin(metadata_list)]
+
+            # 1. Filter metadata to only the keys we need
+            metadata_filtered = metadata[metadata['key'].isin(metadata_list)]
+
+            # 2. Pivot from long (key/value) to wide (columns of keys)
+            # Using aggfunc='first' safely handles any duplicate sample_id/key combinations
+            result_metadata = metadata_filtered.pivot_table(
+                                                          index='sample_id', 
+                                                          columns='key', 
+                                                          values='value', 
+                                                          aggfunc='first').reset_index()
             
-            # Creating metadata dataframe in order to join it's values to the sequences dataframe
-            data_mtdata = []
-            for j in metadata_df.key.unique():
-                data_mtdata.append(metadata_df[metadata_df.key==j].drop("key",axis=1).rename({"value":j},axis=1).reset_index(drop=True))
-
-            result_metadata = pd.concat(data_mtdata, axis=1).T.drop_duplicates().T[["sample_id"] + metadata_list]
-
             # Renaming the metadata columns names according to the rename_metadata & new_metadata_names arguments
             if rename_metadata:
                 rename_dict = {i:j for i,j in zip(metadata_list, new_metadata_names)}
@@ -179,8 +181,7 @@ class Trimer():
                 metadata_list = metadata_list
             
             # Placing the metadata values into the sequcnes dataframe
-            result_dict = {i[1]:[i[2],i[3]] for i in result_metadata.itertuples()}
-            seqs[metadata_list] = list(seqs.sample_id.apply(lambda X : result_dict[X]).values)
+            seqs = seqs.merge(result_metadata[['sample_id'] + metadata_list], on="sample_id", how="left")
             self.cleaned_seqs = seqs.copy()
 
             # Creating unique sequences only dataframe
@@ -195,6 +196,11 @@ class Trimer():
             if os.path.exists(processed_folder) == False:
                 os.mkdir(processed_folder)
                 print("> Processed folder havent been found, creating folder.")
+            
+            # Remove null values
+            # Remove non functional clones
+            self.cleaned_seqs = self.cleaned_seqs.dropna(axis=0, how="any")
+            self.cleaned_seqs = self.cleaned_seqs[(self.cleaned_seqs.functional == 1)]
 
             self.cleaned_seqs.to_csv(cleaned_seqs_path)
             ("> 'cleaned_seqs.csv' saved to processed_data folder.")
@@ -261,7 +267,7 @@ class Trimer():
             temp_df["label"] = ulbl
             output_dfs.append(temp_df)
 
-        self.trimers =pd.concat(output_dfs).groupby(["label","first_aa","region","trimer"]).count().reset_index()
+        self.trimers = pd.concat(output_dfs).groupby(["label","first_aa","region","trimer"]).count().reset_index()
         
         if save_csv:
             scsv_path = f"trimers_data\\{"-".join(subdatasets_list)}-{source}" #-trimers.csv"
