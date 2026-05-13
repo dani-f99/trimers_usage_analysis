@@ -55,14 +55,18 @@ def nt_transalte_104(cdr_seq:str,
     cdr3_len = len(cdr_seq[0]) #cdr3 length
     nt_seq = cdr_seq[1] #1-104 sequence
 
+    # Dealing with sequences that dosent divide to 3
+
+
     translated = []
     t_length = int((len(nt_seq)-len(nt_seq)%3)/3)
 
     #if the number of NT spacers in the NT sequence isn't equal to 3 there is a change in 
     #Reading frame and need to cheek the sequence 
-    n_spaces = nt_seq.count("-")
-    if  n_spaces % 3 != 0:
-        raise Exception("Number of NT spacers dosent divide by 3, cheek sequence") 
+    if False:
+        n_spaces = nt_seq.count("-")
+        if  n_spaces % 3 != 0:
+            raise Exception("Number of NT spacers dosent divide by 3, cheek sequence") 
 
     # Translating the NT sequence
     for i in range(1,t_length):
@@ -183,27 +187,47 @@ class Trimer():
             # Placing the metadata values into the sequcnes dataframe
             seqs = seqs.merge(result_metadata[['sample_id'] + metadata_list], on="sample_id", how="left")
             self.cleaned_seqs = seqs.copy()
+            dropped_log = []
 
-            # Creating unique sequences only dataframe
+            # Creating unique sequences only dataframe - from the collapsed sequences table (won't collapse two simillar sequences from diffrent samples)
             unique_seq_list = self.seqs_col.loc[(self.seqs_col.seq_ai.isin(self.cleaned_seqs.ai.values)) & (self.seqs_col.instances_in_subject > 0), "collapse_to_subject_seq_id"].values
-            self.cleaned_seqs = self.cleaned_seqs[self.cleaned_seqs.seq_id.isin(unique_seq_list)]
+            cond1_unique = self.cleaned_seqs.seq_id.isin(unique_seq_list) # Filter no.1 - removing duplicates - via collapsed dataframe
+            
+            # Saving dropped rows
+            dropped_log.append(self.cleaned_seqs.loc[cond1_unique == False, ["seq_id", "ai"]])
+            dropped_log[0]["why_drop"] = "dupe_collapsed"
+
+            self.cleaned_seqs = self.cleaned_seqs[cond1_unique]
 
             # Filtring out rows woth NT sequence that dosent divide by 3 and getting report df
-            self.dropped_3dv = self.cleaned_seqs[(self.cleaned_seqs.germline.str.count("-")%3 != 0) | (self.cleaned_seqs.sequence.str.count("-")%3 != 0)]
-            self.cleaned_seqs = self.cleaned_seqs[(self.cleaned_seqs.germline.str.count("-")%3 == 0) & (self.cleaned_seqs.sequence.str.count("-")%3 == 0)]
+            # Remove non functional clones
+            cond2_func = (self.cleaned_seqs.functional == 1)
+            dropped_log.append(self.cleaned_seqs.loc[cond2_func == False, ["seq_id", "ai"]])
+            dropped_log[1]["why_drop"] = "non_func"
 
+            self.cleaned_seqs = self.cleaned_seqs[cond2_func] # Filter no.2 - removing non function clones
+
+            
+            # Removing null values
+            cond3_nulls = self.cleaned_seqs.isnull().any(axis=1)
+            dropped_log.append(self.cleaned_seqs.loc[cond3_nulls, ["seq_id", "ai"]])
+            dropped_log[2]["why_drop"] = "null_value"
+
+            self.cleaned_seqs = self.cleaned_seqs[cond3_nulls == False]
+
+        
             # Saving the the cleaned sequences data into the defualt location
             if os.path.exists(processed_folder) == False:
                 os.mkdir(processed_folder)
                 print("> Processed folder havent been found, creating folder.")
-            
-            # Remove null values
-            # Remove non functional clones
-            self.cleaned_seqs = self.cleaned_seqs.dropna(axis=0, how="any")
-            self.cleaned_seqs = self.cleaned_seqs[(self.cleaned_seqs.functional == 1)]
 
             self.cleaned_seqs.to_csv(cleaned_seqs_path)
             ("> 'cleaned_seqs.csv' saved to processed_data folder.")
+
+            dropped_rows = pd.concat(dropped_log, axis=0)
+            dropped_rows.to_csv(os.path.join(processed_folder, "dropped_seqs.csv"))
+
+
     
     # Creating trimmer dataframe for all the sub-datasets
     def create(self,

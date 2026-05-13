@@ -137,7 +137,7 @@ class TrimerLPA():
         """
 
         pca_input = self.sig_df
-        pca_intput_index = self.sig_df.index
+        pca_intput_index = self.sig_df.columns
 
         if scale:
             pca_input = StandardScaler().fit_transform(self.sig_df.T)
