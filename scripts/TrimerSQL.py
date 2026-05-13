@@ -48,7 +48,7 @@ class mysql():
     
     # Creating folder and importing the database
     def import_tables(self,
-                      tables = ["sample_metadata", "sequences", "sequence_collapse"]):
+                      tables = ["sample_metadata", "sequences", "sequence_collapse", "clones", "clone_stats"]):
         
         """
         tabels : list of strings -> names of the required tables from the sql server, will be downloaded in csv format.
@@ -77,7 +77,7 @@ class mysql():
         num = 1
         for i in self.tables:
 
-            if i in ["sample_metadata", "sequence_collapse"]:
+            if i in ["sample_metadata", "sequence_collapse", "clones", "clone_stats"]:
                 qry = "SELECT * FROM {t_name};".format(t_name=i)
             else:
                 qry = "SELECT * FROM {t_name} WHERE functional = 1 AND sample_id IS NOT NULL AND clone_id IS NOT NULL;".format(t_name=i)

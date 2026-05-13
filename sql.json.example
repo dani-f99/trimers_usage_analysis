@@ -1,0 +1,5 @@
+{"username":"sql_database_username",
+ "password":"sql_database_password",
+ "adress":"sql_database_adress",
+ "port":3306,
+ "database":"database_name"}

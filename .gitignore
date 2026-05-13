@@ -1,0 +1,12 @@
+rep_seq.ipynb
+scripts\__pycache__
+sql.json
+
+raw_tables
+trimers_data
+trimers_figures
+trimers_medians
+trimers_medians_analysis
+trimers_processed_tables
+trimers_raw_tables
+trimers_results
