@@ -1,10 +1,15 @@
+#########
+# Imports
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import os 
 from tqdm import tqdm
+import json
 import math
 
+
+########################################################
 # Codons dictionary used for the nt sequence translation
 codon_dic_updated = {
                 'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
@@ -28,6 +33,8 @@ codon_dic_updated = {
                 'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G'
                 }
 
+
+########################################################
 # Translating NT sequense and creating trimers dataframe
 def nt_transalte_104(cdr_seq:str, 
                      aa_start:int = 1, 
@@ -124,7 +131,101 @@ def nt_transalte_104(cdr_seq:str,
 
     return trimer_result #, reg_list # results_aa_cleaned
 
-#
+
+####################################################################################
+# helper function to assign representitive clone mutation into the germline sequence
+def get_mutdf(row) -> str:
+    # Relevent columns for the analysis
+    clone_id = row["id"]
+    mut_tree = row["mutations"]
+    sequence = list(row["germline"])
+
+    # Shortcuts name for all mutations types
+    type_dict = {"conservative":"conc",
+                "nonconservative":"non-cons",
+                "synonymous":"syn"}
+    
+    ## Gettting the clones mutations
+    # If clone has mutations
+    try:
+        # Getting the clone mutations list
+        json_tree = json.loads(mut_tree)["regions"]["ALL"]
+        json_keys = list(json_tree.keys())
+
+        # List to save the string-json results
+        mutations = {}
+        
+        n = 0
+        for k in json_keys:
+            key_json = json_tree[k]
+
+            for i in key_json:
+                n += 1
+                #mutation information
+                nt_pos, nt_from, nt_to, count, mut_type =  i["pos"], i["from_nt"], i["to_nt"], i["total"], k
+                mut_log = [nt_from + str(nt_pos) + nt_to, count, "unique", type_dict[mut_type]]
+                cond_aacheeck = (sequence[nt_pos] == nt_from)
+                
+                # if the nt positing havent been changed yet OR the mutation has higher count than those that was changed already
+                if cond_aacheeck & (nt_pos not in mutations.keys()):
+                    mutations[nt_pos] = mut_log
+                    sequence[nt_pos] = nt_to
+
+                # if the nt mutation already exsits and it's count is higher than whats been changed already
+                elif cond_aacheeck & (nt_pos in mutations.keys()) & (count > mutations[nt_pos][-2]):
+                    mutations[nt_pos] = mut_log
+                    sequence[nt_pos] = nt_to
+
+                else:
+                    raise ValueError(f"nt position {nt_pos} in germline dosen't satisfy: {sequence[nt_pos]} == {nt_from}.")
+        
+        return mutations, "".join(sequence)
+
+    #if clone dosent have mutations -> returns null values
+    except:
+        return np.nan, row["germline"]
+
+
+#############################################################################################
+# Merging clones, clone_stats and metadata table to unified dataframe for furthuer processing
+def merge_clones(clones_path : str,
+                 clone_stats_path : str,
+                 metadata_table_path : str,
+                 req_metadata : list) -> pd.DataFrame:
+    """
+    req_metadata -> list of required metadata columns.
+    Function that phrases over dataframe and extract the unique mutations for clone id.
+    """
+
+    # Defining raw datasets paths
+    paths_dict = {"clones" : clones_path,
+                  "clone_stats" : clone_stats_path,
+                  "metadata_table" : metadata_table_path}
+
+    # Importing datasets into the python enviorment
+    raw_files = {}
+    for f in paths_dict:
+        file_path = paths_dict[f]
+        raw_files[f] = pd.read_csv(file_path, index_col=0)
+
+    clone_stats, clones, metadata_table = raw_files["clone_stats"], raw_files["clones"], raw_files["metadata_table"]
+
+    # Cleaning the dataframe and merging required columns
+    clone_stats = clone_stats.copy()[["clone_id", "sample_id", "mutations"]]
+    clones = clones.copy()[["id", "subject_id", "functional", "germline", "cdr3_aa"]]
+    clones_merged = clones.merge(right=clone_stats, left_on="id", right_on="clone_id", how="left")
+
+    # Pivoting the metadatatable for better structure & filtring for needed crows
+    metadata_pivot = metadata_table.pivot_table(index="sample_id", columns="key", values="value", aggfunc='first')[req_metadata].reset_index()
+    clones_merged = clones_merged.merge(right=metadata_pivot, on="sample_id", how="left")
+    clones_merged = clones_merged[clones_merged.sample_id.notnull() & clones_merged.functional == 1] # removing null sample_id rows and non-functional clones
+
+    clones_merged[["mut_log", "sequence"]] = clones_merged.apply(get_mutdf, axis=1, result_type='expand')
+
+    return clones_merged
+
+
+###############
 class Trimer():
     # list of the relevent columns of the sequences table sql output.
     relevent_cols = ["seq_id", "ai", "sample_id", "subject_id", "clone_id", "functional", "copy_number",  "cdr3_aa", "sequence", "germline"]
@@ -132,9 +233,12 @@ class Trimer():
     # Initiating the trimer class
     def __init__(self, 
                  metadata_list : list,
+                 source : str,
                  seqs_loc = "trimers_raw_tables\\sequences.csv",
                  seq_collapsed_loc = "trimers_raw_tables\\sequence_collapse.csv",
                  metadata_loc = "trimers_raw_tables\\sample_metadata.csv",
+                 clones_loc = "trimers_raw_tables\\clones.csv",
+                 clones_stats_loc = "trimers_raw_tables\\clone_stats.csv",
                  rename_metadata = False,
                  new_metadata_names = None):
         
@@ -147,92 +251,121 @@ class Trimer():
                                           the new names only in the same index rder as metadata_list input.
         '''
 
+        # Verifing that the source argument filled properly
+        self.source = source
+        good_source = ["germline", "top_seq", "all_seq", "representative"]
+        if self.source not in good_source:
+            raise Exception(f"> Incorrect `source` argument input, not in {good_source}")
+        
+
         # If the processed sequcnes csv already exists in the defualt location it will be imported.
-        cleaned_seqs_path = "trimers_processed_tables\\cleaned_seqs.csv"
+        cleaned_seqs_path = f"trimers_processed_tables\\cleaned_seqs_{self.source}.csv"
         processed_folder = "trimers_processed_tables"
-        if os.path.exists("trimers_processed_tables\\cleaned_seqs.csv"):
+
+        if os.path.exists(cleaned_seqs_path):
             print("> Found cleaned_seqs.csv in the procesed tables folder.")
             self.cleaned_seqs = pd.read_csv(cleaned_seqs_path, index_col=0)
             print("> 'cleaned_seqs.csv' loaded.")
 
         # Creating the processed sequcnes file.
         else:
-            # Importing the sequences csv
-            # Filtring out: non-functional seqs, non-sample specific and  non-clone specific
-            seqs = pd.read_csv(seqs_loc, index_col=0)[self.relevent_cols]
-            self.seqs_col = pd.read_csv(seq_collapsed_loc, index_col=0)
-            
-            # Importing the metadata csv and orginizing the dataframe for the relevent information.
-            metadata = pd.read_csv(metadata_loc, index_col=0)
+            if self.source != "representative":
+                # Importing the sequences csv
+                # Filtring out: non-functional seqs, non-sample specific and  non-clone specific
+                seqs = pd.read_csv(seqs_loc, index_col=0)[self.relevent_cols]
+                self.seqs_col = pd.read_csv(seq_collapsed_loc, index_col=0)
+                
+                # Importing the metadata csv and orginizing the dataframe for the relevent information.
+                metadata = pd.read_csv(metadata_loc, index_col=0)
 
-            # 1. Filter metadata to only the keys we need
-            metadata_filtered = metadata[metadata['key'].isin(metadata_list)]
+                # 1. Filter metadata to only the keys we need
+                metadata_filtered = metadata[metadata['key'].isin(metadata_list)]
 
-            # 2. Pivot from long (key/value) to wide (columns of keys)
-            # Using aggfunc='first' safely handles any duplicate sample_id/key combinations
-            result_metadata = metadata_filtered.pivot_table(
-                                                          index='sample_id', 
-                                                          columns='key', 
-                                                          values='value', 
-                                                          aggfunc='first').reset_index()
+                # 2. Pivot from long (key/value) to wide (columns of keys)
+                # Using aggfunc='first' safely handles any duplicate sample_id/key combinations
+                result_metadata = metadata_filtered.pivot_table(
+                                                            index='sample_id', 
+                                                            columns='key', 
+                                                            values='value', 
+                                                            aggfunc='first').reset_index()
+                
+                # Renaming the metadata columns names according to the rename_metadata & new_metadata_names arguments
+                if rename_metadata:
+                    rename_dict = {i:j for i,j in zip(metadata_list, new_metadata_names)}
+                    result_metadata.rename(rename_dict, axis=1, inplace=True)
+                    metadata_list = new_metadata_names
+                else:
+                    metadata_list = metadata_list
+                
+                # Placing the metadata values into the sequcnes dataframe
+                seqs = seqs.merge(result_metadata[['sample_id'] + metadata_list], on="sample_id", how="left")
+                self.cleaned_seqs = seqs.copy()
+                dropped_log = []
+
+                # Creating unique sequences only dataframe - from the collapsed sequences table (won't collapse two simillar sequences from diffrent samples)
+                unique_seq_list = self.seqs_col.loc[(self.seqs_col.seq_ai.isin(self.cleaned_seqs.ai.values)) & (self.seqs_col.instances_in_subject > 0), "collapse_to_subject_seq_id"].values
+                cond1_unique = self.cleaned_seqs.seq_id.isin(unique_seq_list) # Filter no.1 - removing duplicates - via collapsed dataframe
+                
+                # Saving dropped rows
+                dropped_log.append(self.cleaned_seqs.loc[cond1_unique == False, ["seq_id", "ai"]])
+                dropped_log[0]["why_drop"] = "dupe_collapsed"
+
+                self.cleaned_seqs = self.cleaned_seqs[cond1_unique]
+
+                # Filtring out rows woth NT sequence that dosent divide by 3 and getting report df
+                # Remove non functional clones
+                cond2_func = (self.cleaned_seqs.functional == 1)
+                dropped_log.append(self.cleaned_seqs.loc[cond2_func == False, ["seq_id", "ai"]])
+                dropped_log[1]["why_drop"] = "non_func"
+
+                self.cleaned_seqs = self.cleaned_seqs[cond2_func] # Filter no.2 - removing non function clones
+
+                
+                # Removing null values
+                cond3_nulls = self.cleaned_seqs.isnull().any(axis=1)
+                dropped_log.append(self.cleaned_seqs.loc[cond3_nulls, ["seq_id", "ai"]])
+                dropped_log[2]["why_drop"] = "null_value"
+
+                self.cleaned_seqs = self.cleaned_seqs[cond3_nulls == False]
+
             
-            # Renaming the metadata columns names according to the rename_metadata & new_metadata_names arguments
-            if rename_metadata:
-                rename_dict = {i:j for i,j in zip(metadata_list, new_metadata_names)}
-                result_metadata.rename(rename_dict, axis=1, inplace=True)
-                metadata_list = new_metadata_names
+                # Saving the the cleaned sequences data into the defualt location
+                if os.path.exists(processed_folder) == False:
+                    os.mkdir(processed_folder)
+                    print("> Processed folder havent been found, creating folder.")
+
+                self.cleaned_seqs.to_csv(cleaned_seqs_path)
+                ("> 'cleaned_seqs.csv' saved to processed_data folder.")
+
+                dropped_rows = pd.concat(dropped_log, axis=0)
+                dropped_rows.to_csv(os.path.join(processed_folder, f"dropped_seqs_{self.source}.csv"))
+            
+            # if source is "representative"
             else:
-                metadata_list = metadata_list
-            
-            # Placing the metadata values into the sequcnes dataframe
-            seqs = seqs.merge(result_metadata[['sample_id'] + metadata_list], on="sample_id", how="left")
-            self.cleaned_seqs = seqs.copy()
-            dropped_log = []
+                # Getting the database name from the config file
+                with open("sql.json") as file:
+                    sql_info = json.load(file)
+                db = sql_info["database"]
 
-            # Creating unique sequences only dataframe - from the collapsed sequences table (won't collapse two simillar sequences from diffrent samples)
-            unique_seq_list = self.seqs_col.loc[(self.seqs_col.seq_ai.isin(self.cleaned_seqs.ai.values)) & (self.seqs_col.instances_in_subject > 0), "collapse_to_subject_seq_id"].values
-            cond1_unique = self.cleaned_seqs.seq_id.isin(unique_seq_list) # Filter no.1 - removing duplicates - via collapsed dataframe
-            
-            # Saving dropped rows
-            dropped_log.append(self.cleaned_seqs.loc[cond1_unique == False, ["seq_id", "ai"]])
-            dropped_log[0]["why_drop"] = "dupe_collapsed"
-
-            self.cleaned_seqs = self.cleaned_seqs[cond1_unique]
-
-            # Filtring out rows woth NT sequence that dosent divide by 3 and getting report df
-            # Remove non functional clones
-            cond2_func = (self.cleaned_seqs.functional == 1)
-            dropped_log.append(self.cleaned_seqs.loc[cond2_func == False, ["seq_id", "ai"]])
-            dropped_log[1]["why_drop"] = "non_func"
-
-            self.cleaned_seqs = self.cleaned_seqs[cond2_func] # Filter no.2 - removing non function clones
-
-            
-            # Removing null values
-            cond3_nulls = self.cleaned_seqs.isnull().any(axis=1)
-            dropped_log.append(self.cleaned_seqs.loc[cond3_nulls, ["seq_id", "ai"]])
-            dropped_log[2]["why_drop"] = "null_value"
-
-            self.cleaned_seqs = self.cleaned_seqs[cond3_nulls == False]
-
-        
-            # Saving the the cleaned sequences data into the defualt location
-            if os.path.exists(processed_folder) == False:
-                os.mkdir(processed_folder)
-                print("> Processed folder havent been found, creating folder.")
-
-            self.cleaned_seqs.to_csv(cleaned_seqs_path)
-            ("> 'cleaned_seqs.csv' saved to processed_data folder.")
-
-            dropped_rows = pd.concat(dropped_log, axis=0)
-            dropped_rows.to_csv(os.path.join(processed_folder, "dropped_seqs.csv"))
+                # Creating cleaned sequences file
+                self.cleaned_seqs = merge_clones(clones_path = os.path.join("trimers_raw_tables", f"{db}.clones.csv"),
+                                                 clone_stats_path = os.path.join("trimers_raw_tables", f"{db}.clone_stats.csv"),
+                                                 metadata_table_path = os.path.join("trimers_raw_tables", f"{db}.sample_metadata.csv"),
+                                                 req_metadata = metadata_list)
+                
+                # Renaming metadata columns if needed
+                if rename_metadata:
+                    self.cleaned_seqs.rename(mapper={i:j for i,j in zip(metadata_list, new_metadata_names)}, axis=1, inplace=True)
+                
+                # Saving file
+                self.cleaned_seqs.to_csv(cleaned_seqs_path)
+                ("> 'cleaned_seqs.csv' saved to processed_data folder.")
 
 
-    
     # Creating trimmer dataframe for all the sub-datasets
     def create(self,
                       subdatasets_list:list,
-                      source:str,
+                      #source:str,
                       start_pos:int = None,
                       end_pos:int = None,
                       save_csv=True):
@@ -260,12 +393,12 @@ class Trimer():
         # assiging the labels to the labels column
         self.cleaned_seqs["label"] = labels
        
-        source_dict = {"germline":"germline", "top_seq":"sequence", "all_seq":"sequence"}
-        if source in ["germline", "top_seq"]:
+        source_dict = {"germline":"germline", "top_seq":"sequence", "all_seq":"sequence", "representative":"sequence"}
+        if self.source in ["germline", "top_seq"]:
             idx = self.cleaned_seqs.groupby('clone_id')['copy_number'].idxmax()
-            input_df = self.cleaned_seqs.loc[idx, ["label", "clone_id", "cdr3_aa"] + [source_dict[source]]]
+            input_df = self.cleaned_seqs.loc[idx, ["label", "clone_id", "cdr3_aa"] + [source_dict[self.source]]]
         
-        elif source == "all_seq":
+        elif self.source in ["all_seq", "representative"]:
             input_df = self.cleaned_seqs[["label","clone_id","cdr3_aa","sequence"]]
 
         else:
@@ -278,7 +411,7 @@ class Trimer():
         for ulbl in tqdm(self.cleaned_seqs.label.unique(), unit="dataset", initial=0):
             temp_output = input_df[input_df.label == ulbl]
             unique_clones.append([ulbl, temp_output.shape[0]]) # save the unique number of sequences per dataset
-            temp_output = (temp_output.cdr3_aa + "." + temp_output[source_dict[source]]).apply(nt_transalte_104)
+            temp_output = (temp_output.cdr3_aa + "." + temp_output[source_dict[self.source]]).apply(nt_transalte_104)
             temp_df = None
 
             #print(f"Concatenating {ulbl} sub-dataset analysis results") #[{}/{n_ulbl}]")
@@ -294,7 +427,7 @@ class Trimer():
         self.trimers = pd.concat(output_dfs).groupby(["label","first_aa","region","trimer"]).count().reset_index()
         
         if save_csv:
-            scsv_path = f"trimers_data\\{"-".join(subdatasets_list)}-{source}" #-trimers.csv"
+            scsv_path = f"trimers_data\\{"-".join(subdatasets_list)}-{self.source}" #-trimers.csv"
 
             if os.path.exists("trimers_data") is False:
                 os.mkdir("trimers_data")    
